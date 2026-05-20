@@ -88,16 +88,23 @@ def main():
 
         save_debug(page, "04_after_filters")
 
-        # Datoer
-        try:
-            page.get_by_label("Tidligst", exact=False).fill("01.07.2026", timeout=10000)
-        except Exception:
-            page.locator("input").nth(0).fill("01.07.2026")
+# Datoer - fyll kun synlige tekst-/datofelt, ikke checkboxer
+date_inputs = page.locator(
+    "input:not([type='checkbox']):not([type='radio']):visible"
+)
 
-        try:
-            page.get_by_label("Senest", exact=False).fill("05.08.2026", timeout=10000)
-        except Exception:
-            page.locator("input").nth(1).fill("05.08.2026")
+count = date_inputs.count()
+print(f"Fant {count} synlige input-felt for dato/tekst")
+
+if count < 2:
+    save_debug(page, "error_date_inputs")
+    raise Exception(f"Fant bare {count} synlige input-felt. Forventet minst 2.")
+
+date_inputs.nth(0).click()
+date_inputs.nth(0).fill("01.07.2026")
+
+date_inputs.nth(1).click()
+date_inputs.nth(1).fill("05.08.2026")
 
         save_debug(page, "05_after_dates")
 
