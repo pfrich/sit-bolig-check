@@ -6,6 +6,9 @@ on:
 
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -20,22 +23,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Cache Playwright and pip
+      - name: Cache Playwright
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/ms-playwright
-            ~/.cache/pip
-          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          python -m playwright install chromium
+          if [ ! -d "$HOME/.cache/ms-playwright" ] || [ -z "$(ls -A $HOME/.cache/ms-playwright 2>/dev/null)" ]; then
+            python -m playwright install chromium
+          else
+            echo "Chromium cache found"
+          fi
 
       - name: Run script
         run: python check_sit.py
+
+      - name: Commit seen units
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add seen_units.json
+          git diff --cached --quiet || git commit -m "Update seen SiT units"
+          git push
 
       - name: Upload debug files
         if: failure()
