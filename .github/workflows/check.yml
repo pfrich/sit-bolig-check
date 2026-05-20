@@ -1,8 +1,12 @@
 name: Check SiT housing
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 "on":
   schedule:
     - cron: "*/5 * * * *"
+
   workflow_dispatch:
 
 permissions:
@@ -11,37 +15,55 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+
     timeout-minutes: 4
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install Python packages
-        run: pip install -r requirements.txt
-
       - name: Cache Playwright
-        uses: actions/cache@v4
         id: playwright-cache
+        uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}
 
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
       - name: Install Chromium if not cached
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: python -m playwright install chromium
+        run: |
+          python -m playwright install chromium
 
       - name: Run script
-        run: python check_sit.py
+        run: |
+          python check_sit.py
 
       - name: Commit seen units
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+
           git add seen_units.json
+
           git diff --cached --quiet || git commit -m "Update seen SiT units"
+
           git push
+
+      - name: Upload debug files
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sit-debug-files
+          path: |
+            *.png
+            *.txt
