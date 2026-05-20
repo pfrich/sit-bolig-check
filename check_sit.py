@@ -2,7 +2,6 @@ import requests
 from playwright.sync_api import sync_playwright
 
 TOPIC = "per-sit-hybel-2026"
-URL = "https://bolig.sit.no/"
 
 
 def notify(text):
@@ -20,20 +19,25 @@ def notify(text):
 
 def save_debug(page, name):
     page.screenshot(path=f"{name}.png", full_page=True)
+
     with open(f"{name}.txt", "w", encoding="utf-8") as f:
         f.write(page.inner_text("body"))
 
 
-def click_if_visible(page, text, timeout=3000):
+def click_if_exists(page, text):
     locator = page.get_by_text(text, exact=False)
+
     if locator.count() > 0:
-        locator.first.click(timeout=timeout)
+        locator.first.click(timeout=10000)
+        page.wait_for_timeout(1000)
         return True
+
     return False
 
 
 def main():
     with sync_playwright() as p:
+
         browser = p.chromium.launch(headless=True)
 
         page = browser.new_page(
@@ -41,83 +45,126 @@ def main():
             viewport={"width": 1600, "height": 1200},
         )
 
-        page.goto(URL, wait_until="networkidle", timeout=60000)
+        page.goto(
+            "https://bolig.sit.no/",
+            wait_until="networkidle",
+            timeout=60000,
+        )
+
         save_debug(page, "01_start")
 
-        # Cookie/samtykke hvis det vises
-        for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
+        # Cookie-banner
+        for text in [
+            "Godta",
+            "Aksepter",
+            "Tillat alle",
+            "OK",
+            "Jeg forstår",
+        ]:
             try:
-                if click_if_visible(page, text):
-                    page.wait_for_timeout(1000)
+                if click_if_exists(page, text):
                     break
             except Exception:
                 pass
 
         save_debug(page, "02_after_cookie")
 
-        # Forsøk å komme til bolig-/søkeside hvis forsiden har knapp/lenke
-        for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
+        # Klikk eventuell bolig/søk-knapp
+        for text in [
+            "Finn bolig",
+            "Søk bolig",
+            "Ledige boliger",
+            "Boliger",
+        ]:
             try:
-                if click_if_visible(page, text):
-                    page.wait_for_load_state("networkidle", timeout=30000)
-                    page.wait_for_timeout(1000)
+                if click_if_exists(page, text):
+                    page.wait_for_load_state("networkidle")
                     break
             except Exception:
                 pass
 
-        save_debug(page, "03_search_page")
+        save_debug(page, "03_after_navigation")
 
         # Velg filtre
-        filter_texts = [
+        filters = [
             "Tillitsbasert utvalg",
             "Jeg er førstegangsstudent",
             "Trondheim",
             "Hybel i kollektiv m/eget bad",
         ]
 
-        for text in filter_texts:
-            try:
-                clicked = click_if_visible(page, text, timeout=10000)
-                if not clicked:
-                    raise Exception(f"Fant ikke filtertekst: {text}")
-                page.wait_for_timeout(500)
-            except Exception as e:
-                save_debug(page, f"error_filter_{text.replace(' ', '_')}")
-                notify(f"SiT-sjekk feilet ved filter:\n{text}\n\n{type(e).__name__}: {e}")
-                raise
+        for text in filters:
+
+            locator = page.get_by_text(text, exact=False)
+
+            if locator.count() == 0:
+                save_debug(page, f"missing_{text}")
+                notify(f"Fant ikke filter: {text}")
+                raise Exception(f"Fant ikke filter: {text}")
+
+            locator.first.click(timeout=10000)
+
+            page.wait_for_timeout(1000)
 
         save_debug(page, "04_after_filters")
 
-# Datoer - fyll kun synlige tekst-/datofelt, ikke checkboxer
-date_inputs = page.locator(
-    "input:not([type='checkbox']):not([type='radio']):visible"
-)
+        # Finn synlige inputfelt
+        date_inputs = page.locator(
+            "input:not([type='checkbox']):not([type='radio'])"
+        )
 
-count = date_inputs.count()
-print(f"Fant {count} synlige input-felt for dato/tekst")
+        visible_inputs = []
 
-if count < 2:
-    save_debug(page, "error_date_inputs")
-    raise Exception(f"Fant bare {count} synlige input-felt. Forventet minst 2.")
+        total = date_inputs.count()
 
-date_inputs.nth(0).click()
-date_inputs.nth(0).fill("01.07.2026")
+        for i in range(total):
 
-date_inputs.nth(1).click()
-date_inputs.nth(1).fill("05.08.2026")
+            try:
+                element = date_inputs.nth(i)
+
+                if element.is_visible():
+                    visible_inputs.append(element)
+
+            except Exception:
+                pass
+
+        print(f"Fant {len(visible_inputs)} synlige inputfelt")
+
+        if len(visible_inputs) < 2:
+            save_debug(page, "error_inputs")
+            raise Exception(
+                f"Fant bare {len(visible_inputs)} synlige inputfelt"
+            )
+
+        # Fyll datoer
+        visible_inputs[0].click()
+        visible_inputs[0].fill("01.07.2026")
+
+        visible_inputs[1].click()
+        visible_inputs[1].fill("05.08.2026")
+
+        page.wait_for_timeout(1000)
 
         save_debug(page, "05_after_dates")
 
-        # Søk
-        try:
-            page.get_by_role("button", name="Søk").click(timeout=10000)
-        except Exception:
-            page.get_by_text("Søk", exact=False).first.click(timeout=10000)
+        # Klikk søk
+        search_button = page.get_by_role(
+            "button",
+            name="Søk",
+        )
 
-        page.wait_for_load_state("networkidle", timeout=30000)
-        page.wait_for_timeout(2000)
+        if search_button.count() > 0:
+            search_button.first.click(timeout=10000)
+        else:
+            page.get_by_text("Søk", exact=False).first.click(
+                timeout=10000
+            )
 
-        save_debug(page, "06_result")
+        page.wait_for_load_state("networkidle")
+
+        page.wait_for_timeout(3000)
+
+        save_debug(page, "06_results")
 
         body = page.inner_text("body")
 
@@ -133,17 +180,18 @@ date_inputs.nth(1).fill("05.08.2026")
         )
 
         if no_hits:
-            print("Ingen treff funnet.")
+            print("Ingen treff")
         else:
+
             notify(
                 "Mulig ledig SiT-hybel funnet!\n\n"
-                "Område: Trondheim\n"
-                "Boligtype: Hybel i kollektiv m/eget bad\n"
-                "Periode: 01.07.2026–05.08.2026\n\n"
-                "Sjekk manuelt:\n"
+                "Trondheim\n"
+                "Hybel i kollektiv m/eget bad\n"
+                "01.07.2026 - 05.08.2026\n\n"
                 "https://bolig.sit.no/"
             )
-            print("Varsel sendt.")
+
+            print("Varsel sendt")
 
         browser.close()
 
