@@ -88,8 +88,7 @@ def save_debug(page, name: str) -> None:
 
 
 def click_text(page, text: str, required: bool = True) -> bool:
-    page.wait_for_timeout(500)
-
+    """Click element by text without unnecessary waits"""
     locator = page.get_by_text(text, exact=False)
 
     if locator.count() == 0 and len(text.split()) > 1:
@@ -102,8 +101,19 @@ def click_text(page, text: str, required: bool = True) -> bool:
 
     locator.first.scroll_into_view_if_needed(timeout=5000)
     locator.first.click(timeout=10000)
-    page.wait_for_timeout(300)
     return True
+
+
+def try_click_one_of(page, texts: list[str]) -> bool:
+    """Try clicking one of multiple texts efficiently"""
+    for text in texts:
+        try:
+            if click_text(page, text, required=False):
+                page.wait_for_timeout(800)
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def extract_available_from(text: str) -> str:
@@ -126,6 +136,7 @@ def extract_available_from(text: str) -> str:
 def get_housing_items(page) -> list[dict]:
     links = page.locator("a[href*='/unit/']")
     items = []
+    seen = set()
 
     for i in range(links.count()):
         link = links.nth(i)
@@ -135,6 +146,11 @@ def get_housing_items(page) -> list[dict]:
             continue
 
         url = f"https://bolig.sit.no{href}" if href.startswith("/") else href
+        
+        if url in seen:
+            continue
+        
+        seen.add(url)
         text = link.inner_text().strip()
         lines = [line.strip() for line in text.splitlines() if line.strip()]
 
@@ -146,17 +162,7 @@ def get_housing_items(page) -> list[dict]:
             }
         )
 
-    unique = []
-    seen = set()
-
-    for item in items:
-        if item["url"] in seen:
-            continue
-
-        seen.add(item["url"])
-        unique.append(item)
-
-    return unique
+    return items
 
 
 def build_message(items: list[dict]) -> str:
@@ -188,33 +194,30 @@ def main() -> None:
 
         page = browser.new_page(
             locale="nb-NO",
-            viewport={"width": 1500, "height": 1200},
+            viewport={"width": 1024, "height": 768},
         )
 
         try:
-            page.goto(URL, wait_until="domcontentloaded", timeout=25000)
-            page.wait_for_timeout(1200)
+            page.goto(URL, wait_until="networkidle", timeout=25000)
 
-            for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
-                try:
-                    if click_text(page, text, required=False):
-                        break
-                except Exception:
-                    pass
+            # Lukk cookie/godkjenne-banner
+            try_click_one_of(page, ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"])
 
-            for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
-                try:
-                    if click_text(page, text, required=False):
-                        page.wait_for_timeout(1000)
-                        break
-                except Exception:
-                    pass
+            # Åpne boligsøk
+            try_click_one_of(page, ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"])
 
+            # Velg filteralternativer
             if FIRST_YEAR_STUDENT:
-                click_text(page, "førstegangsstudent")
+                try:
+                    click_text(page, "førstegangsstudent")
+                except Exception:
+                    pass
 
             if TRUST_BASED_SELECTION:
-                click_text(page, "Tillitsbasert utvalg")
+                try:
+                    click_text(page, "Tillitsbasert utvalg")
+                except Exception:
+                    pass
 
             click_text(page, AREA)
             click_text(page, HOUSING_TYPE)
@@ -223,7 +226,7 @@ def main() -> None:
             page.locator("input[name='maxAvailableDate']").fill(MAX_DATE)
 
             page.get_by_role("button", name="Søk").last.click(timeout=7000)
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(1500)
 
             if DEBUG:
                 save_debug(page, "result")
@@ -248,17 +251,10 @@ def main() -> None:
                 if item["url"] not in seen_set
             ]
 
-            updated_seen_links = seen_links.copy()
-
-            for item in housing_items:
-                url = item["url"]
-
-                if url in updated_seen_links:
-                    updated_seen_links.remove(url)
-
-                updated_seen_links.append(url)
-
-            save_seen_links(updated_seen_links)
+            # Oppdater seen_links mer effektivt
+            updated_seen_links = [item["url"] for item in housing_items]
+            updated_seen_links.extend([link for link in seen_links if link not in updated_seen_links])
+            save_seen_links(updated_seen_links[:MAX_SEEN_LINKS])
 
             if not new_items:
                 print("Ingen nye boliger. Varsler ikke.")
