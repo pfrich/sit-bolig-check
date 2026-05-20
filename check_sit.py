@@ -1,5 +1,7 @@
 import re
 import requests
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright
 
 # =========================================================
@@ -9,7 +11,7 @@ from playwright.sync_api import sync_playwright
 TOPIC = "per-sit-hybel-2026"
 URL = "https://bolig.sit.no/"
 
-MIN_DATE = "2026-06-10"
+MIN_DATE = "2026-07-01"
 MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
@@ -21,7 +23,46 @@ TRUST_BASED_SELECTION = False
 HEADLESS = True
 DEBUG = False
 
+# Kjør kun i denne perioden
+ACTIVE_FROM = date(2026, 5, 20)
+ACTIVE_UNTIL = date(2026, 6, 19)
+
+# Kjør kun mellom 06:30 og 23:00 norsk tid
+RUN_FROM_HOUR = 6
+RUN_FROM_MINUTE = 30
+RUN_UNTIL_HOUR = 23
+RUN_UNTIL_MINUTE = 0
+
 # =========================================================
+
+
+def should_run_now() -> bool:
+    now = datetime.now(ZoneInfo("Europe/Oslo"))
+    today = now.date()
+
+    if today < ACTIVE_FROM or today > ACTIVE_UNTIL:
+        print(f"Utenfor aktiv periode: {today}")
+        return False
+
+    start = now.replace(
+        hour=RUN_FROM_HOUR,
+        minute=RUN_FROM_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+
+    end = now.replace(
+        hour=RUN_UNTIL_HOUR,
+        minute=RUN_UNTIL_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+
+    if not (start <= now <= end):
+        print(f"Utenfor klokkeslett: {now}")
+        return False
+
+    return True
 
 
 def notify(message: str) -> None:
@@ -151,6 +192,9 @@ def build_message(housing_items: list[dict]) -> str:
 
 
 def main() -> None:
+    if not should_run_now():
+        return
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
 
