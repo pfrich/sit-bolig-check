@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 TOPIC = "per-sit-hybel-2026"
 
-MIN_DATE = "2026-07-01"
+MIN_DATE = "2026-06-13"
 MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
@@ -70,22 +70,18 @@ def get_housing_links(page):
     housing_links = []
 
     for i in range(links.count()):
-        try:
-            href = links.nth(i).get_attribute("href")
+        href = links.nth(i).get_attribute("href")
 
-            if not href:
-                continue
+        if not href:
+            continue
 
-            if href.startswith("/"):
-                full_url = f"https://bolig.sit.no{href}"
-            else:
-                full_url = href
+        if href.startswith("/"):
+            full_url = f"https://bolig.sit.no{href}"
+        else:
+            full_url = href
 
-            if full_url not in housing_links:
-                housing_links.append(full_url)
-
-        except Exception:
-            pass
+        if full_url not in housing_links:
+            housing_links.append(full_url)
 
     return housing_links
 
@@ -102,7 +98,6 @@ def main():
         page.goto(URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
 
-        # Cookie/samtykke
         for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
             try:
                 if click_text(page, text, required=False):
@@ -110,7 +105,6 @@ def main():
             except Exception:
                 pass
 
-        # Eventuell navigasjon
         for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
             try:
                 if click_text(page, text, required=False):
@@ -121,7 +115,6 @@ def main():
 
         save_debug(page, "01_before_filters")
 
-        # Filtre
         if FIRST_YEAR_STUDENT:
             click_text(page, "Jeg er førstegangsstudent", required=True)
 
@@ -133,47 +126,23 @@ def main():
 
         save_debug(page, "02_after_filters")
 
-        # Datoer - input type=date må bruke YYYY-MM-DD
-        min_date = page.locator("input[name='minAvailableDate']")
-        max_date = page.locator("input[name='maxAvailableDate']")
-
-        if min_date.count() == 0:
-            save_debug(page, "missing_min_date")
-            raise Exception("Fant ikke datofeltet minAvailableDate")
-
-        if max_date.count() == 0:
-            save_debug(page, "missing_max_date")
-            raise Exception("Fant ikke datofeltet maxAvailableDate")
-
-        min_date.fill(MIN_DATE)
-        max_date.fill(MAX_DATE)
+        page.locator("input[name='minAvailableDate']").fill(MIN_DATE)
+        page.locator("input[name='maxAvailableDate']").fill(MAX_DATE)
 
         page.wait_for_timeout(1000)
         save_debug(page, "03_after_dates")
 
-        # Søk - nederste Søk-knapp
         page.get_by_role("button", name="Søk").last.click(timeout=10000)
-        page.wait_for_timeout(5000)
 
+        page.wait_for_timeout(5000)
         save_debug(page, "04_results")
 
         body = page.inner_text("body")
         body_lower = body.lower()
 
-        no_hits_texts = [
-            "ingen treff med valgte søkeord",
-            "ingen treff",
-            "ingen ledige",
-            "0 treff",
-            "fant ingen",
-            "ingen boliger",
-        ]
-
-        no_hits = any(text in body_lower for text in no_hits_texts)
-
         housing_links = get_housing_links(page)
 
-        if no_hits:
+        if "ingen treff med valgte søkeord" in body_lower:
             print("Ingen treff med valgte søkeord. Varsler ikke.")
         else:
             message = (
@@ -189,7 +158,7 @@ def main():
                     message += f"{link}\n"
             else:
                 message += (
-                    "Ingen direkte boliglenker funnet.\n\n"
+                    "Fant ikke direkte boliglenker.\n\n"
                     "Sjekk søket manuelt:\n"
                     "https://bolig.sit.no/"
                 )
