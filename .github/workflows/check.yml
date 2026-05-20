@@ -3,7 +3,6 @@ name: Check SiT housing
 on:
   schedule:
     - cron: "*/5 * * * *"
-
   workflow_dispatch:
 
 jobs:
@@ -24,3 +23,12 @@ jobs:
 
       - name: Run script
         run: python check_sit.py
+
+      - name: Upload debug files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sit-debug-files
+          path: |
+            *.png
+            *.txt
