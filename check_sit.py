@@ -24,20 +24,6 @@ def save_debug(page, name):
         f.write(page.inner_text("body"))
 
 
-def click_text(page, text, required=True):
-    locator = page.get_by_text(text, exact=False)
-
-    if locator.count() == 0:
-        if required:
-            save_debug(page, f"missing_{safe_name(text)}")
-            raise Exception(f"Fant ikke tekst: {text}")
-        return False
-
-    locator.first.click(timeout=10000)
-    page.wait_for_timeout(800)
-    return True
-
-
 def safe_name(text):
     return (
         text.replace(" ", "_")
@@ -48,44 +34,42 @@ def safe_name(text):
     )
 
 
+def click_text(page, text, required=True):
+    locator = page.get_by_text(text, exact=False)
+
+    if locator.count() == 0:
+        if required:
+            save_debug(page, f"missing_{safe_name(text)}")
+            raise Exception(f"Fant ikke tekst: {text}")
+        return False
+
+    locator.first.click(timeout=10000)
+    page.wait_for_timeout(700)
+    return True
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
 
         page = browser.new_page(
             locale="nb-NO",
-            viewport={"width": 1600, "height": 1200},
+            viewport={"width": 1600, "height": 1400},
         )
 
-        page.goto(
-            URL,
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
-
+        page.goto(URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
 
         # Cookie/samtykke
-        for text in [
-            "Godta",
-            "Aksepter",
-            "Tillat alle",
-            "OK",
-            "Jeg forstår",
-        ]:
+        for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
             try:
                 if click_text(page, text, required=False):
                     break
             except Exception:
                 pass
 
-        # Eventuell navigasjon til søkeside
-        for text in [
-            "Finn bolig",
-            "Søk bolig",
-            "Ledige boliger",
-            "Boliger",
-        ]:
+        # Eventuell navigasjon
+        for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
             try:
                 if click_text(page, text, required=False):
                     page.wait_for_timeout(2000)
@@ -95,9 +79,8 @@ def main():
 
         save_debug(page, "01_before_filters")
 
-        # Filtre
+        # Filtre som skal velges
         filters = [
-            "Tillitsbasert utvalg",
             "Jeg er førstegangsstudent",
             "Trondheim",
             "Hybel i kollektiv m/eget bad",
@@ -108,67 +91,26 @@ def main():
 
         save_debug(page, "02_after_filters")
 
-        # Datofelter - input type=date må bruke YYYY-MM-DD
-        min_date = page.locator("input[name='minAvailableDate']")
-        max_date = page.locator("input[name='maxAvailableDate']")
-
-        if min_date.count() == 0:
-            save_debug(page, "missing_min_date")
-            raise Exception("Fant ikke datofeltet minAvailableDate")
-
-        if max_date.count() == 0:
-            save_debug(page, "missing_max_date")
-            raise Exception("Fant ikke datofeltet maxAvailableDate")
-
-        min_date.fill("2026-07-01")
-        max_date.fill("2026-08-05")
+        # Datoer: input type=date må bruke YYYY-MM-DD
+        page.locator("input[name='minAvailableDate']").fill("2026-07-01")
+        page.locator("input[name='maxAvailableDate']").fill("2026-08-05")
 
         page.wait_for_timeout(1000)
-
         save_debug(page, "03_after_dates")
 
-        # Klikk søk
-        try:
-            page.get_by_role("button", name="Søk").first.click(timeout=10000)
-        except Exception:
-            page.get_by_text("Søk", exact=False).first.click(timeout=10000)
+        # Trykk på den nederste Søk-knappen
+        page.get_by_role("button", name="Søk").last.click(timeout=10000)
 
         page.wait_for_timeout(5000)
-
         save_debug(page, "04_results")
 
         body = page.inner_text("body")
         body_lower = body.lower()
 
-        no_hits = any(
-            text in body_lower
-            for text in [
-                "ingen ledige",
-                "0 treff",
-                "ingen treff",
-                "ingen treff med valgte søkeord",
-                "fant ingen",
-                "ingen boliger",
-            ]
-        )
+        if "ingen treff med valgte søkeord" in body_lower:
+            print("Ingen treff med valgte søkeord. Varsler ikke.")
 
-        has_possible_hits = any(
-            text in body_lower
-            for text in [
-                "hybel i kollektiv",
-                "ledig fra",
-                "månedsleie",
-                "manedsleie",
-                "kr per måned",
-                "kr/mnd",
-                "søknadsfrist",
-            ]
-        )
-
-        if no_hits:
-            print("Ingen treff funnet. Varsler ikke.")
-
-        elif has_possible_hits:
+        else:
             notify(
                 "Mulig ledig SiT-hybel funnet!\n\n"
                 "Område: Trondheim\n"
@@ -177,10 +119,8 @@ def main():
                 "Sjekk manuelt:\n"
                 "https://bolig.sit.no/"
             )
-            print("Varsel sendt.")
 
-        else:
-            print("Ingen sikker treffindikasjon funnet. Varsler ikke.")
+            print("Varsel sendt.")
 
         browser.close()
 
