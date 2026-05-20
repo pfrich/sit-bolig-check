@@ -28,10 +28,10 @@ MAX_SEEN_LINKS = 10
 ACTIVE_FROM = date(2026, 5, 20)
 ACTIVE_UNTIL = date(2026, 6, 19)
 
-RUN_FROM_HOUR = 6
-RUN_FROM_MINUTE = 30
-RUN_UNTIL_HOUR = 23
-RUN_UNTIL_MINUTE = 0
+RUN_FROM_HOUR = 0          # 00:00 (midnatt)
+RUN_FROM_MINUTE = 0
+RUN_UNTIL_HOUR = 23        # 23:59 (slutten av dagen)
+RUN_UNTIL_MINUTE = 59
 
 
 def should_run_now() -> bool:
