@@ -6,8 +6,9 @@ from playwright.sync_api import sync_playwright
 # =========================================================
 
 TOPIC = "per-sit-hybel-2026"
+URL = "https://bolig.sit.no/"
 
-MIN_DATE = "2026-06-13"
+MIN_DATE = "2026-06-10"
 MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
@@ -17,31 +18,31 @@ FIRST_YEAR_STUDENT = True
 TRUST_BASED_SELECTION = False
 
 HEADLESS = True
-URL = "https://bolig.sit.no/"
+DEBUG = False
 
 # =========================================================
 
 
-def notify(text):
+def notify(message: str) -> None:
     requests.post(
         f"https://ntfy.sh/{TOPIC}",
-        data=text.encode("utf-8"),
+        data=message.encode("utf-8"),
         headers={
             "Title": "SiT bolig",
             "Priority": "high",
             "Tags": "house",
         },
-        timeout=20,
+        timeout=10,
     )
 
 
-def save_debug(page, name):
+def save_debug(page, name: str) -> None:
     page.screenshot(path=f"{name}.png", full_page=True)
     with open(f"{name}.txt", "w", encoding="utf-8") as f:
         f.write(page.inner_text("body"))
 
 
-def safe_name(text):
+def safe_name(text: str) -> str:
     return (
         text.replace(" ", "_")
         .replace("/", "_")
@@ -51,100 +52,94 @@ def safe_name(text):
     )
 
 
-def click_text(page, text, required=True):
+def click_text(page, text: str, required: bool = True) -> bool:
     locator = page.get_by_text(text, exact=False)
 
     if locator.count() == 0:
         if required:
-            save_debug(page, f"missing_{safe_name(text)}")
+            if DEBUG:
+                save_debug(page, f"missing_{safe_name(text)}")
             raise Exception(f"Fant ikke tekst: {text}")
         return False
 
-    locator.first.click(timeout=10000)
-    page.wait_for_timeout(700)
+    locator.first.click(timeout=7000)
+    page.wait_for_timeout(250)
     return True
 
 
-def get_housing_links(page):
+def get_housing_links(page) -> list[str]:
     links = page.locator("a[href*='/unit/']")
-    housing_links = []
+    result = []
 
     for i in range(links.count()):
         href = links.nth(i).get_attribute("href")
-
         if not href:
             continue
 
-        if href.startswith("/"):
-            full_url = f"https://bolig.sit.no{href}"
-        else:
-            full_url = href
+        full_url = f"https://bolig.sit.no{href}" if href.startswith("/") else href
 
-        if full_url not in housing_links:
-            housing_links.append(full_url)
+        if full_url not in result:
+            result.append(full_url)
 
-    return housing_links
+    return result
 
 
-def main():
+def main() -> None:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
 
         page = browser.new_page(
             locale="nb-NO",
-            viewport={"width": 1600, "height": 1400},
+            viewport={"width": 1500, "height": 1200},
         )
 
-        page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)
+        try:
+            page.goto(URL, wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(1000)
 
-        for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
-            try:
-                if click_text(page, text, required=False):
-                    break
-            except Exception:
-                pass
+            # Cookie/samtykke
+            for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
+                try:
+                    if click_text(page, text, required=False):
+                        break
+                except Exception:
+                    pass
 
-        for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
-            try:
-                if click_text(page, text, required=False):
-                    page.wait_for_timeout(2000)
-                    break
-            except Exception:
-                pass
+            # Eventuell navigasjon
+            for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
+                try:
+                    if click_text(page, text, required=False):
+                        page.wait_for_timeout(1000)
+                        break
+                except Exception:
+                    pass
 
-        save_debug(page, "01_before_filters")
+            if FIRST_YEAR_STUDENT:
+                click_text(page, "Jeg er førstegangsstudent")
 
-        if FIRST_YEAR_STUDENT:
-            click_text(page, "Jeg er førstegangsstudent", required=True)
+            if TRUST_BASED_SELECTION:
+                click_text(page, "Tillitsbasert utvalg")
 
-        if TRUST_BASED_SELECTION:
-            click_text(page, "Tillitsbasert utvalg", required=True)
+            click_text(page, AREA)
+            click_text(page, HOUSING_TYPE)
 
-        click_text(page, AREA, required=True)
-        click_text(page, HOUSING_TYPE, required=True)
+            page.locator("input[name='minAvailableDate']").fill(MIN_DATE)
+            page.locator("input[name='maxAvailableDate']").fill(MAX_DATE)
 
-        save_debug(page, "02_after_filters")
+            page.get_by_role("button", name="Søk").last.click(timeout=7000)
+            page.wait_for_timeout(2500)
 
-        page.locator("input[name='minAvailableDate']").fill(MIN_DATE)
-        page.locator("input[name='maxAvailableDate']").fill(MAX_DATE)
+            if DEBUG:
+                save_debug(page, "result")
 
-        page.wait_for_timeout(1000)
-        save_debug(page, "03_after_dates")
+            body_lower = page.inner_text("body").lower()
 
-        page.get_by_role("button", name="Søk").last.click(timeout=10000)
+            if "ingen treff med valgte søkeord" in body_lower:
+                print("Ingen treff. Varsler ikke.")
+                return
 
-        page.wait_for_timeout(5000)
-        save_debug(page, "04_results")
+            housing_links = get_housing_links(page)
 
-        body = page.inner_text("body")
-        body_lower = body.lower()
-
-        housing_links = get_housing_links(page)
-
-        if "ingen treff med valgte søkeord" in body_lower:
-            print("Ingen treff med valgte søkeord. Varsler ikke.")
-        else:
             message = (
                 "Mulig ledig SiT-hybel funnet!\n\n"
                 f"Område: {AREA}\n"
@@ -154,19 +149,22 @@ def main():
 
             if housing_links:
                 message += "Lenker:\n\n"
-                for link in housing_links[:10]:
-                    message += f"{link}\n"
+                message += "\n".join(housing_links[:10])
             else:
-                message += (
-                    "Fant ikke direkte boliglenker.\n\n"
-                    "Sjekk søket manuelt:\n"
-                    "https://bolig.sit.no/"
-                )
+                message += "Sjekk søket manuelt:\nhttps://bolig.sit.no/"
 
             notify(message)
             print("Varsel sendt.")
 
-        browser.close()
+        except Exception as e:
+            if DEBUG:
+                save_debug(page, "error")
+
+            notify(f"SiT-sjekk feilet:\n{type(e).__name__}: {e}")
+            raise
+
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":
