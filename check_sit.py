@@ -26,7 +26,7 @@ SEEN_FILE = "seen_units.json"
 MAX_SEEN_LINKS = 10
 
 ACTIVE_FROM = date(2026, 5, 20)
-ACTIVE_UNTIL = date(2026, 6, 19)
+ACTIVE_UNTIL = date(2026, 7, 30)
 
 RUN_FROM_HOUR = 0          # 00:00 (midnatt)
 RUN_FROM_MINUTE = 0
