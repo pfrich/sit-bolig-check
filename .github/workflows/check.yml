@@ -3,9 +3,10 @@ name: Check SiT housing
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-"on":
+on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "* * * * *"
+
   workflow_dispatch:
 
 permissions:
