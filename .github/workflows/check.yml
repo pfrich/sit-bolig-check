@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache Playwright + pip
+      - name: Cache Playwright and pip
         uses: actions/cache@v4
         with:
           path: |
