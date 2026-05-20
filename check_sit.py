@@ -1,3 +1,4 @@
+import re
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -67,21 +68,86 @@ def click_text(page, text: str, required: bool = True) -> bool:
     return True
 
 
-def get_housing_links(page) -> list[str]:
+def extract_available_from(text: str) -> str:
+    match = re.search(
+        r"Ledig fra\s+\d{1,2}\.\s+[A-Za-zÆØÅæøå]+\s+\d{4}",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return match.group(0).strip()
+
+    for line in text.splitlines():
+        if "ledig fra" in line.lower():
+            return line.strip()
+
+    return ""
+
+
+def get_housing_items(page) -> list[dict]:
     links = page.locator("a[href*='/unit/']")
-    result = []
+    items = []
 
     for i in range(links.count()):
-        href = links.nth(i).get_attribute("href")
+        link = links.nth(i)
+
+        href = link.get_attribute("href")
         if not href:
             continue
 
-        full_url = f"https://bolig.sit.no{href}" if href.startswith("/") else href
+        url = f"https://bolig.sit.no{href}" if href.startswith("/") else href
 
-        if full_url not in result:
-            result.append(full_url)
+        text = link.inner_text().strip()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
 
-    return result
+        title = lines[0] if lines else "Ukjent bolig"
+        available_from = extract_available_from(text)
+
+        items.append(
+            {
+                "title": title,
+                "available_from": available_from,
+                "url": url,
+            }
+        )
+
+    unique_items = []
+    seen_urls = set()
+
+    for item in items:
+        if item["url"] in seen_urls:
+            continue
+
+        seen_urls.add(item["url"])
+        unique_items.append(item)
+
+    return unique_items
+
+
+def build_message(housing_items: list[dict]) -> str:
+    message = (
+        "Mulig ledig SiT-hybel funnet!\n\n"
+        f"Område: {AREA}\n"
+        f"Boligtype: {HOUSING_TYPE}\n"
+        f"Periode: {MIN_DATE} - {MAX_DATE}\n\n"
+    )
+
+    if housing_items:
+        message += "Boliger:\n\n"
+
+        for item in housing_items[:10]:
+            message += f"{item['title']}\n"
+
+            if item["available_from"]:
+                message += f"{item['available_from']}\n"
+
+            message += f"{item['url']}\n\n"
+
+    else:
+        message += "Sjekk søket manuelt:\nhttps://bolig.sit.no/"
+
+    return message.strip()
 
 
 def main() -> None:
@@ -97,7 +163,6 @@ def main() -> None:
             page.goto(URL, wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(1000)
 
-            # Cookie/samtykke
             for text in ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"]:
                 try:
                     if click_text(page, text, required=False):
@@ -105,7 +170,6 @@ def main() -> None:
                 except Exception:
                     pass
 
-            # Eventuell navigasjon
             for text in ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"]:
                 try:
                     if click_text(page, text, required=False):
@@ -138,22 +202,9 @@ def main() -> None:
                 print("Ingen treff. Varsler ikke.")
                 return
 
-            housing_links = get_housing_links(page)
+            housing_items = get_housing_items(page)
 
-            message = (
-                "Mulig ledig SiT-hybel funnet!\n\n"
-                f"Område: {AREA}\n"
-                f"Boligtype: {HOUSING_TYPE}\n"
-                f"Periode: {MIN_DATE} - {MAX_DATE}\n\n"
-            )
-
-            if housing_links:
-                message += "Lenker:\n\n"
-                message += "\n".join(housing_links[:10])
-            else:
-                message += "Sjekk søket manuelt:\nhttps://bolig.sit.no/"
-
-            notify(message)
+            notify(build_message(housing_items))
             print("Varsel sendt.")
 
         except Exception as e:
