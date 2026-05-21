@@ -2,6 +2,25 @@ name: Check SiT housing
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "new = bare nye, summary = daglig oppsummering"
+        required: true
+        default: "new"
+        type: choice
+        options:
+          - new
+          - summary
+      from_date:
+        description: "Fra-dato, f.eks. 2026-08-01. Tom = standard i scriptet."
+        required: false
+        default: ""
+        type: string
+      to_date:
+        description: "Til-dato, f.eks. 2026-08-31. Tom = standard i scriptet."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -41,9 +60,14 @@ jobs:
         run: python -m playwright install chromium
 
       - name: Run script
-        run: python check_sit.py
+        run: |
+          python check_sit.py \
+            --mode "${{ inputs.mode }}" \
+            --from-date "${{ inputs.from_date }}" \
+            --to-date "${{ inputs.to_date }}"
 
       - name: Commit seen units
+        if: ${{ inputs.mode == 'new' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
