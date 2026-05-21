@@ -12,12 +12,12 @@ on:
           - new
           - summary
       from_date:
-        description: "Fra-dato, f.eks. 2026-08-01. Tom = standard i scriptet."
+        description: "Fra-dato, f.eks. 2026-06-10. Tom = standard i scriptet."
         required: false
         default: ""
         type: string
       to_date:
-        description: "Til-dato, f.eks. 2026-08-31. Tom = standard i scriptet."
+        description: "Til-dato, f.eks. 2026-08-15. Tom = standard i scriptet."
         required: false
         default: ""
         type: string
