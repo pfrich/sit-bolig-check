@@ -6,7 +6,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import requests
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 TOPIC = "per-sit-hybel-2026"
 URL = "https://bolig.sit.no/"
@@ -30,9 +30,9 @@ MAX_MESSAGE_ITEMS = 20
 ACTIVE_FROM = date(2026, 5, 20)
 ACTIVE_UNTIL = date(2026, 7, 30)
 
-RUN_FROM_HOUR = 0
+RUN_FROM_HOUR = 0          # 00:00 (midnatt)
 RUN_FROM_MINUTE = 0
-RUN_UNTIL_HOUR = 23
+RUN_UNTIL_HOUR = 23        # 23:59 (slutten av dagen)
 RUN_UNTIL_MINUTE = 59
 
 
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--from-date",
         default="",
-        help="Overstyr fra-dato i søket, f.eks. 2026-08-01.",
+        help="Overstyr fra-dato i søket, f.eks. 2026-08-01. Brukes typisk for summary.",
     )
     parser.add_argument(
         "--to-date",
@@ -64,18 +64,8 @@ def should_run_now() -> bool:
         print(f"Utenfor aktiv periode: {now.date()}")
         return False
 
-    start = now.replace(
-        hour=RUN_FROM_HOUR,
-        minute=RUN_FROM_MINUTE,
-        second=0,
-        microsecond=0,
-    )
-    end = now.replace(
-        hour=RUN_UNTIL_HOUR,
-        minute=RUN_UNTIL_MINUTE,
-        second=0,
-        microsecond=0,
-    )
+    start = now.replace(hour=RUN_FROM_HOUR, minute=RUN_FROM_MINUTE, second=0, microsecond=0)
+    end = now.replace(hour=RUN_UNTIL_HOUR, minute=RUN_UNTIL_MINUTE, second=0, microsecond=0)
 
     if not (start <= now <= end):
         print(f"Utenfor klokkeslett: {now}")
@@ -119,67 +109,37 @@ def save_seen_links(links: list[str]) -> None:
 
 
 def save_debug(page, name: str) -> None:
-    try:
-        page.screenshot(path=f"{name}.png", full_page=True)
-        Path(f"{name}.txt").write_text(page.inner_text("body"), encoding="utf-8")
-    except Exception as e:
-        print(f"Kunne ikke lagre debug-filer: {e}")
+    page.screenshot(path=f"{name}.png", full_page=True)
+    Path(f"{name}.txt").write_text(page.inner_text("body"), encoding="utf-8")
 
 
-def block_heavy_resources(page) -> None:
-    """Blokker tunge ressurser, men ikke CSS."""
-    page.route(
-        "**/*",
-        lambda route: route.abort()
-        if route.request.resource_type in ["image", "font", "media"]
-        else route.continue_(),
-    )
-
-
-def click_text(page, text: str, required: bool = True, timeout: int = 10000) -> bool:
-    """Click text robustly. Waits for dynamic content before failing."""
+def click_text(page, text: str, required: bool = True) -> bool:
+    """Click element by text without unnecessary waits."""
     locator = page.get_by_text(text, exact=False)
 
-    try:
-        locator.first.wait_for(state="visible", timeout=timeout)
-    except Exception:
-        if len(text.split()) > 1:
-            locator = page.get_by_text(text.split()[-1], exact=False)
-            try:
-                locator.first.wait_for(state="visible", timeout=3000)
-            except Exception:
-                if required:
-                    raise Exception(f"Fant ikke tekst: {text}")
-                return False
-        else:
-            if required:
-                raise Exception(f"Fant ikke tekst: {text}")
-            return False
+    if locator.count() == 0 and len(text.split()) > 1:
+        locator = page.get_by_text(text.split()[-1], exact=False)
 
-    locator.first.scroll_into_view_if_needed(timeout=3000)
-    locator.first.click(timeout=5000)
+    if locator.count() == 0:
+        if required:
+            raise Exception(f"Fant ikke tekst: {text}")
+        return False
+
+    locator.first.scroll_into_view_if_needed(timeout=5000)
+    locator.first.click(timeout=10000)
     return True
 
 
 def try_click_one_of(page, texts: list[str]) -> bool:
+    """Try clicking one of multiple texts efficiently."""
     for text in texts:
         try:
             if click_text(page, text, required=False):
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(800)
                 return True
         except Exception:
             pass
-
     return False
-
-
-def fill_input(page, selector: str, value: str) -> None:
-    field = page.locator(selector)
-
-    if field.count() == 0:
-        raise Exception(f"Fant ikke felt: {selector}")
-
-    field.first.fill(value, timeout=5000)
 
 
 def extract_available_from(text: str) -> str:
@@ -204,10 +164,7 @@ def get_housing_items(page) -> list[dict]:
     items = []
     seen = set()
 
-    count = links.count()
-    print(f"Fant {count} mulige boliglenker.")
-
-    for i in range(count):
+    for i in range(links.count()):
         link = links.nth(i)
         href = link.get_attribute("href")
 
@@ -220,8 +177,7 @@ def get_housing_items(page) -> list[dict]:
             continue
 
         seen.add(url)
-
-        text = link.inner_text(timeout=3000).strip()
+        text = link.inner_text().strip()
         lines = [line.strip() for line in text.splitlines() if line.strip()]
 
         items.append(
@@ -266,56 +222,6 @@ def build_message(items: list[dict], mode: str, min_date: str, max_date: str) ->
     return message.strip()
 
 
-def run_search(page, min_date: str, max_date: str) -> list[dict]:
-    # Raskere enn networkidle, men vi venter eksplisitt på relevante elementer etterpå.
-    page.goto(URL, wait_until="domcontentloaded", timeout=15000)
-
-    # Lukk cookie/godkjenne-banner hvis det finnes.
-    try_click_one_of(page, ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"])
-
-    # Åpne boligsøk hvis forsiden krever det.
-    try_click_one_of(page, ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"])
-
-    # Vent til søkesiden/filterområdet faktisk er lastet.
-    # Dette er viktig fordi domcontentloaded kan være for tidlig på dynamiske sider.
-    try:
-        page.get_by_text(AREA, exact=False).first.wait_for(state="visible", timeout=15000)
-    except Exception:
-        # Fallback: gi siden litt ekstra tid før vi feiler.
-        page.wait_for_timeout(1500)
-
-    if FIRST_YEAR_STUDENT:
-        try_click_one_of(page, ["førstegangsstudent", "Førstegangsstudent"])
-
-    if TRUST_BASED_SELECTION:
-        try_click_one_of(page, ["Tillitsbasert utvalg"])
-
-    click_text(page, AREA, timeout=15000)
-    click_text(page, HOUSING_TYPE, timeout=15000)
-
-    fill_input(page, "input[name='minAvailableDate']", min_date)
-    fill_input(page, "input[name='maxAvailableDate']", max_date)
-
-    page.get_by_role("button", name="Søk").last.click(timeout=7000)
-
-    # Vent kort på resultatlenker eller ingen-treff-tekst.
-    try:
-        page.wait_for_selector("a[href*='/unit/']", timeout=5000)
-    except Exception:
-        page.wait_for_timeout(700)
-
-    if DEBUG:
-        save_debug(page, "result")
-
-    body_lower = page.inner_text("body", timeout=5000).lower()
-
-    if "ingen treff med valgte søkeord" in body_lower:
-        print("Ingen treff.")
-        return []
-
-    return get_housing_items(page)
-
-
 def main() -> None:
     args = parse_args()
 
@@ -336,13 +242,50 @@ def main() -> None:
             viewport={"width": 1024, "height": 768},
         )
 
-        block_heavy_resources(page)
-
         try:
-            housing_items = run_search(page, min_date, max_date)
+            page.goto(URL, wait_until="networkidle", timeout=12000)
+
+            # Lukk cookie/godkjenne-banner
+            try_click_one_of(page, ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"])
+
+            # Åpne boligsøk
+            try_click_one_of(page, ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"])
+
+            # Velg filteralternativer
+            if FIRST_YEAR_STUDENT:
+                try:
+                    click_text(page, "førstegangsstudent")
+                except Exception:
+                    pass
+
+            if TRUST_BASED_SELECTION:
+                try:
+                    click_text(page, "Tillitsbasert utvalg")
+                except Exception:
+                    pass
+
+            click_text(page, AREA)
+            click_text(page, HOUSING_TYPE)
+
+            page.locator("input[name='minAvailableDate']").fill(min_date)
+            page.locator("input[name='maxAvailableDate']").fill(max_date)
+
+            page.get_by_role("button", name="Søk").last.click(timeout=7000)
+            page.wait_for_timeout(500)
+
+            if DEBUG:
+                save_debug(page, "result")
+
+            body_lower = page.inner_text("body").lower()
+
+            if "ingen treff med valgte søkeord" in body_lower:
+                print("Ingen treff. Varsler ikke.")
+                return
+
+            housing_items = get_housing_items(page)
 
             if not housing_items:
-                print("Ingen boliger å varsle.")
+                print("Fant treffside, men ingen boliglenker. Varsler ikke.")
                 return
 
             if args.mode == "summary":
@@ -357,6 +300,7 @@ def main() -> None:
                     if item["url"] not in seen_set
                 ]
 
+                # Oppdater seen_units.json bare i new-modus
                 updated_seen_links = [item["url"] for item in housing_items]
                 updated_seen_links.extend(
                     link for link in seen_links
@@ -365,20 +309,11 @@ def main() -> None:
                 save_seen_links(updated_seen_links)
 
             if not items_to_notify:
-                print("Ingen nye boliger å varsle.")
+                print("Ingen boliger å varsle.")
                 return
 
-            message = build_message(items_to_notify, args.mode, min_date, max_date)
-            notify(message, args.mode)
-
+            notify(build_message(items_to_notify, args.mode, min_date, max_date), args.mode)
             print(f"Varsel sendt for {len(items_to_notify)} boliger.")
-
-        except PlaywrightTimeoutError as e:
-            if DEBUG:
-                save_debug(page, "error")
-
-            notify(f"SiT-sjekk feilet på timeout:\n{e}", args.mode)
-            raise
 
         except Exception as e:
             if DEBUG:
