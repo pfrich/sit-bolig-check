@@ -12,7 +12,7 @@ TOPIC = "per-sit-hybel-2026"
 URL = "https://bolig.sit.no/"
 
 DEFAULT_MIN_DATE = "2026-06-10"
-DEFAULT_MAX_DATE = "2026-08-15"
+DEFAULT_MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
 HOUSING_TYPE = "Hybel i kollektiv m/eget bad"
@@ -136,16 +136,25 @@ def block_heavy_resources(page) -> None:
     )
 
 
-def click_text(page, text: str, required: bool = True) -> bool:
+def click_text(page, text: str, required: bool = True, timeout: int = 10000) -> bool:
+    """Click text robustly. Waits for dynamic content before failing."""
     locator = page.get_by_text(text, exact=False)
 
-    if locator.count() == 0 and len(text.split()) > 1:
-        locator = page.get_by_text(text.split()[-1], exact=False)
-
-    if locator.count() == 0:
-        if required:
-            raise Exception(f"Fant ikke tekst: {text}")
-        return False
+    try:
+        locator.first.wait_for(state="visible", timeout=timeout)
+    except Exception:
+        if len(text.split()) > 1:
+            locator = page.get_by_text(text.split()[-1], exact=False)
+            try:
+                locator.first.wait_for(state="visible", timeout=3000)
+            except Exception:
+                if required:
+                    raise Exception(f"Fant ikke tekst: {text}")
+                return False
+        else:
+            if required:
+                raise Exception(f"Fant ikke tekst: {text}")
+            return False
 
     locator.first.scroll_into_view_if_needed(timeout=3000)
     locator.first.click(timeout=5000)
@@ -258,8 +267,8 @@ def build_message(items: list[dict], mode: str, min_date: str, max_date: str) ->
 
 
 def run_search(page, min_date: str, max_date: str) -> list[dict]:
-    # Raskere enn networkidle. Venter bare til HTML er lastet.
-    page.goto(URL, wait_until="domcontentloaded", timeout=12000)
+    # Raskere enn networkidle, men vi venter eksplisitt på relevante elementer etterpå.
+    page.goto(URL, wait_until="domcontentloaded", timeout=15000)
 
     # Lukk cookie/godkjenne-banner hvis det finnes.
     try_click_one_of(page, ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"])
@@ -267,22 +276,33 @@ def run_search(page, min_date: str, max_date: str) -> list[dict]:
     # Åpne boligsøk hvis forsiden krever det.
     try_click_one_of(page, ["Finn bolig", "Søk bolig", "Ledige boliger", "Boliger"])
 
+    # Vent til søkesiden/filterområdet faktisk er lastet.
+    # Dette er viktig fordi domcontentloaded kan være for tidlig på dynamiske sider.
+    try:
+        page.get_by_text(AREA, exact=False).first.wait_for(state="visible", timeout=15000)
+    except Exception:
+        # Fallback: gi siden litt ekstra tid før vi feiler.
+        page.wait_for_timeout(1500)
+
     if FIRST_YEAR_STUDENT:
         try_click_one_of(page, ["førstegangsstudent", "Førstegangsstudent"])
 
     if TRUST_BASED_SELECTION:
         try_click_one_of(page, ["Tillitsbasert utvalg"])
 
-    click_text(page, AREA)
-    click_text(page, HOUSING_TYPE)
+    click_text(page, AREA, timeout=15000)
+    click_text(page, HOUSING_TYPE, timeout=15000)
 
     fill_input(page, "input[name='minAvailableDate']", min_date)
     fill_input(page, "input[name='maxAvailableDate']", max_date)
 
-    page.get_by_role("button", name="Søk").last.click(timeout=5000)
+    page.get_by_role("button", name="Søk").last.click(timeout=7000)
 
-    # Kort vent etter søk. Ikke CSS-blokkering, så UI bør fortsatt fungere.
-    page.wait_for_timeout(500)
+    # Vent kort på resultatlenker eller ingen-treff-tekst.
+    try:
+        page.wait_for_selector("a[href*='/unit/']", timeout=5000)
+    except Exception:
+        page.wait_for_timeout(700)
 
     if DEBUG:
         save_debug(page, "result")
