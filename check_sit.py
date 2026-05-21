@@ -243,7 +243,7 @@ def main() -> None:
         )
 
         try:
-            page.goto(URL, wait_until="networkidle", timeout=25000)
+            page.goto(URL, wait_until="networkidle", timeout=12000)
 
             # Lukk cookie/godkjenne-banner
             try_click_one_of(page, ["Godta", "Aksepter", "Tillat alle", "OK", "Jeg forstår"])
@@ -271,7 +271,7 @@ def main() -> None:
             page.locator("input[name='maxAvailableDate']").fill(max_date)
 
             page.get_by_role("button", name="Søk").last.click(timeout=7000)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(500)
 
             if DEBUG:
                 save_debug(page, "result")
