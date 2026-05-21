@@ -1,3 +1,4 @@
+import argparse
 import json
 import re
 from pathlib import Path
@@ -10,8 +11,8 @@ from playwright.sync_api import sync_playwright
 TOPIC = "per-sit-hybel-2026"
 URL = "https://bolig.sit.no/"
 
-MIN_DATE = "2026-06-10"
-MAX_DATE = "2026-08-05"
+DEFAULT_MIN_DATE = "2026-06-10"
+DEFAULT_MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
 HOUSING_TYPE = "Hybel i kollektiv m/eget bad"
@@ -24,6 +25,7 @@ DEBUG = False
 
 SEEN_FILE = "seen_units.json"
 MAX_SEEN_LINKS = 10
+MAX_MESSAGE_ITEMS = 20
 
 ACTIVE_FROM = date(2026, 5, 20)
 ACTIVE_UNTIL = date(2026, 7, 30)
@@ -32,6 +34,27 @@ RUN_FROM_HOUR = 0          # 00:00 (midnatt)
 RUN_FROM_MINUTE = 0
 RUN_UNTIL_HOUR = 23        # 23:59 (slutten av dagen)
 RUN_UNTIL_MINUTE = 59
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Check available SiT housing units.")
+    parser.add_argument(
+        "--mode",
+        choices=["new", "summary"],
+        default="new",
+        help="new = varsle bare nye boliger. summary = send alle treff i søket.",
+    )
+    parser.add_argument(
+        "--from-date",
+        default="",
+        help="Overstyr fra-dato i søket, f.eks. 2026-08-01. Brukes typisk for summary.",
+    )
+    parser.add_argument(
+        "--to-date",
+        default="",
+        help="Overstyr til-dato i søket, f.eks. 2026-08-31.",
+    )
+    return parser.parse_args()
 
 
 def should_run_now() -> bool:
@@ -51,13 +74,16 @@ def should_run_now() -> bool:
     return True
 
 
-def notify(message: str) -> None:
-    requests.post(
+def notify(message: str, mode: str) -> None:
+    title = "SiT bolig - oppsummering" if mode == "summary" else "SiT bolig"
+
+    response = requests.post(
         f"https://ntfy.sh/{TOPIC}",
         data=message.encode("utf-8"),
-        headers={"Title": "SiT bolig", "Priority": "high", "Tags": "house"},
+        headers={"Title": title, "Priority": "high", "Tags": "house"},
         timeout=10,
     )
+    response.raise_for_status()
 
 
 def load_seen_links() -> list[str]:
@@ -74,7 +100,7 @@ def load_seen_links() -> list[str]:
 
 
 def save_seen_links(links: list[str]) -> None:
-    trimmed = links[-MAX_SEEN_LINKS:]
+    trimmed = links[:MAX_SEEN_LINKS]
 
     Path(SEEN_FILE).write_text(
         json.dumps(trimmed, indent=2, ensure_ascii=False),
@@ -88,7 +114,7 @@ def save_debug(page, name: str) -> None:
 
 
 def click_text(page, text: str, required: bool = True) -> bool:
-    """Click element by text without unnecessary waits"""
+    """Click element by text without unnecessary waits."""
     locator = page.get_by_text(text, exact=False)
 
     if locator.count() == 0 and len(text.split()) > 1:
@@ -105,7 +131,7 @@ def click_text(page, text: str, required: bool = True) -> bool:
 
 
 def try_click_one_of(page, texts: list[str]) -> bool:
-    """Try clicking one of multiple texts efficiently"""
+    """Try clicking one of multiple texts efficiently."""
     for text in texts:
         try:
             if click_text(page, text, required=False):
@@ -146,10 +172,10 @@ def get_housing_items(page) -> list[dict]:
             continue
 
         url = f"https://bolig.sit.no{href}" if href.startswith("/") else href
-        
+
         if url in seen:
             continue
-        
+
         seen.add(url)
         text = link.inner_text().strip()
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -165,16 +191,24 @@ def get_housing_items(page) -> list[dict]:
     return items
 
 
-def build_message(items: list[dict]) -> str:
+def build_message(items: list[dict], mode: str, min_date: str, max_date: str) -> str:
+    if mode == "summary":
+        heading = "Daglig oppsummering av ledige SiT-boliger"
+        item_heading = "Ledige boliger"
+    else:
+        heading = "Ny ledig SiT-hybel funnet!"
+        item_heading = "Nye boliger"
+
     message = (
-        "Ny ledig SiT-hybel funnet!\n\n"
+        f"{heading}\n\n"
         f"Område: {AREA}\n"
         f"Boligtype: {HOUSING_TYPE}\n"
-        f"Periode: {MIN_DATE} - {MAX_DATE}\n\n"
-        "Nye boliger:\n\n"
+        f"Periode: {min_date} - {max_date}\n"
+        f"Antall: {len(items)}\n\n"
+        f"{item_heading}:\n\n"
     )
 
-    for item in items[:10]:
+    for item in items[:MAX_MESSAGE_ITEMS]:
         message += f"{item['title']}\n"
 
         if item["available_from"]:
@@ -182,12 +216,23 @@ def build_message(items: list[dict]) -> str:
 
         message += f"{item['url']}\n\n"
 
+    if len(items) > MAX_MESSAGE_ITEMS:
+        message += f"... og {len(items) - MAX_MESSAGE_ITEMS} til.\n"
+
     return message.strip()
 
 
 def main() -> None:
+    args = parse_args()
+
     if not should_run_now():
         return
+
+    min_date = args.from_date.strip() or DEFAULT_MIN_DATE
+    max_date = args.to_date.strip() or DEFAULT_MAX_DATE
+
+    print(f"Kjører modus: {args.mode}")
+    print(f"Søkeperiode: {min_date} - {max_date}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
@@ -222,8 +267,8 @@ def main() -> None:
             click_text(page, AREA)
             click_text(page, HOUSING_TYPE)
 
-            page.locator("input[name='minAvailableDate']").fill(MIN_DATE)
-            page.locator("input[name='maxAvailableDate']").fill(MAX_DATE)
+            page.locator("input[name='minAvailableDate']").fill(min_date)
+            page.locator("input[name='maxAvailableDate']").fill(max_date)
 
             page.get_by_role("button", name="Søk").last.click(timeout=7000)
             page.wait_for_timeout(1500)
@@ -243,31 +288,38 @@ def main() -> None:
                 print("Fant treffside, men ingen boliglenker. Varsler ikke.")
                 return
 
-            seen_links = load_seen_links()
-            seen_set = set(seen_links)
+            if args.mode == "summary":
+                items_to_notify = housing_items
+                print("Summary-modus: filtrerer ikke mot seen_units.json.")
+            else:
+                seen_links = load_seen_links()
+                seen_set = set(seen_links)
 
-            new_items = [
-                item for item in housing_items
-                if item["url"] not in seen_set
-            ]
+                items_to_notify = [
+                    item for item in housing_items
+                    if item["url"] not in seen_set
+                ]
 
-            # Oppdater seen_links mer effektivt
-            updated_seen_links = [item["url"] for item in housing_items]
-            updated_seen_links.extend([link for link in seen_links if link not in updated_seen_links])
-            save_seen_links(updated_seen_links[:MAX_SEEN_LINKS])
+                # Oppdater seen_units.json bare i new-modus
+                updated_seen_links = [item["url"] for item in housing_items]
+                updated_seen_links.extend(
+                    link for link in seen_links
+                    if link not in updated_seen_links
+                )
+                save_seen_links(updated_seen_links)
 
-            if not new_items:
-                print("Ingen nye boliger. Varsler ikke.")
+            if not items_to_notify:
+                print("Ingen boliger å varsle.")
                 return
 
-            notify(build_message(new_items))
-            print(f"Varsel sendt for {len(new_items)} nye boliger.")
+            notify(build_message(items_to_notify, args.mode, min_date, max_date), args.mode)
+            print(f"Varsel sendt for {len(items_to_notify)} boliger.")
 
         except Exception as e:
             if DEBUG:
                 save_debug(page, "error")
 
-            notify(f"SiT-sjekk feilet:\n{type(e).__name__}: {e}")
+            notify(f"SiT-sjekk feilet:\n{type(e).__name__}: {e}", args.mode)
             raise
 
         finally:
