@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 TOPIC = "per-sit-hybel-2026"
 URL = "https://bolig.sit.no/"
 
-DEFAULT_MIN_DATE = "2026-06-10"
+DEFAULT_MIN_DATE = "2026-06-05"
 DEFAULT_MAX_DATE = "2026-08-05"
 
 AREA = "Trondheim"
